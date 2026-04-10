@@ -53,7 +53,7 @@ parser.add_argument('--dataset', default='cifar10', type=str, help='dataset to u
 args = parser.parse_args()
 
 # take in args
-usewandb = ~args.nowandb
+usewandb = not args.nowandb
 if usewandb:
     import wandb
     watermark = "{}_lr{}_{}".format(args.net, args.lr, args.dataset)
@@ -67,7 +67,7 @@ imsize = int(args.size)
 use_amp = not args.noamp
 aug = args.noaug
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -112,11 +112,16 @@ if aug:
     transform_train.transforms.insert(0, RandAugment(N, M))
 
 # Prepare dataset
+# On macOS (spawn-based multiprocessing), num_workers > 0 requires if __name__=='__main__' guard.
+# Use 0 workers on macOS to avoid RuntimeError.
+import platform
+_num_workers = 0 if platform.system() == 'Darwin' else 8
+
 trainset = dataset_class(root='./data', train=True, download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=8)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=_num_workers)
 
 testset = dataset_class(root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
+testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=_num_workers)
 
 # Set up class names based on the dataset
 if args.dataset == 'cifar10':
@@ -271,7 +276,7 @@ if args.resume:
     print('==> Resuming from checkpoint..')
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     checkpoint_path = './checkpoint/{}-{}-{}-ckpt.t7'.format(args.net, args.dataset, args.patch)
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     net.load_state_dict(checkpoint['net'])
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
@@ -288,7 +293,9 @@ elif args.opt == "sgd":
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.n_epochs)
 
 ##### Training
-scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+# AMP (float16) is only stable on CUDA; disable on MPS/CPU
+_amp_enabled = use_amp and device == 'cuda'
+scaler = torch.amp.GradScaler('cuda', enabled=_amp_enabled)
 def train(epoch):
     print('\nEpoch: %d' % epoch)
     net.train()
@@ -298,7 +305,7 @@ def train(epoch):
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         # Train with amp
-        with torch.cuda.amp.autocast(enabled=use_amp):
+        with torch.autocast(device_type=device, enabled=_amp_enabled):
             outputs = net(inputs)
             loss = criterion(outputs, targets)
         scaler.scale(loss).backward()
@@ -365,29 +372,35 @@ list_acc = []
 
 if usewandb:
     wandb.watch(net)
-    
-net.cuda()
-for epoch in range(start_epoch, args.n_epochs):
+
+net.to(device)
+
+from tqdm import tqdm
+pbar = tqdm(range(start_epoch, args.n_epochs), desc="Training", unit="epoch")
+for epoch in pbar:
     start = time.time()
     trainloss = train(epoch)
     val_loss, acc = test(epoch)
-    
+
     scheduler.step(epoch-1) # step cosine scheduling
-    
+
     list_loss.append(val_loss)
     list_acc.append(acc)
-    
+
+    epoch_time = time.time() - start
+    pbar.set_postfix({"val_acc": f"{acc:.2f}%", "val_loss": f"{val_loss:.3f}", "best": f"{best_acc:.2f}%", "time": f"{epoch_time:.0f}s"})
+
     # Log training..
     if usewandb:
         wandb.log({'epoch': epoch, 'train_loss': trainloss, 'val_loss': val_loss, "val_acc": acc, "lr": optimizer.param_groups[0]["lr"],
-        "epoch_time": time.time()-start})
+        "epoch_time": epoch_time})
 
     # Write out csv..
     csv_file = f'log/log_{args.net}_{args.dataset}_patch{args.patch}.csv'
     with open(csv_file, 'w') as f:
         writer = csv.writer(f, lineterminator='\n')
-        writer.writerow(list_loss) 
-        writer.writerow(list_acc) 
+        writer.writerow(list_loss)
+        writer.writerow(list_acc)
     print(list_loss)
 
 # writeout wandb

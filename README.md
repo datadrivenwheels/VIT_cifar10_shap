@@ -1,11 +1,8 @@
-# vision-transformers-cifar10
-This is your go-to playground for training Vision Transformers (ViT) and its related models on CIFAR-10/CIFAR-100, a common benchmark dataset in computer vision.
+# vision-transformers-cifar10 + SHAP
 
-The whole codebase is implemented in Pytorch, which makes it easier for you to tweak and experiment. Over the months, we've made several notable updates including adding different models like ConvMixer, CaiT, ViT-small, SwinTransformers, and MLP mixer. We've also adapted the default training settings for ViT to fit better with the CIFAR-10/CIFAR-100 dataset.
+A PyTorch playground for training Vision Transformers (ViT) and related models on CIFAR-10/CIFAR-100, extended with **SHAP patch-importance analysis** to interpret which image patches drive each model prediction.
 
-Using the repository is straightforward - all you need to do is run the `train_cifar10.py` script with different arguments, depending on the model and training parameters you'd like to use.
-
-Thanks, the repo has been used in [30+ papers](https://scholar.google.co.jp/scholar?hl=en&as_sdt=0%2C5&q=vision-transformers-cifar10&btnG=) including CVPR, ICLR, Neurips!
+The repo has been used in [30+ papers](https://scholar.google.co.jp/scholar?hl=en&as_sdt=0%2C5&q=vision-transformers-cifar10&btnG=) including CVPR, ICLR, and NeurIPS.
 
 Please use this citation format if you use this in your research.
 ```
@@ -18,92 +15,134 @@ Please use this citation format if you use this in your research.
 }
 ```
 
-### Updates
-* Added [ConvMixer]((https://openreview.net/forum?id=TVHS5Y4dNvM)) implementation. Really simple! (2021/10)
+---
 
-* Added wandb train log to reproduce results. (2022/3)
+## Setup (Anaconda — including Apple Silicon M-series)
 
-* Added CaiT and ViT-small. (2022/3)
+```bash
+conda env create -f environment.yml
+conda activate vit-cifar10
+```
 
-* Added SwinTransformers. (2022/3)
+The environment includes PyTorch with MPS (Metal) support for M-series Macs, plus all dependencies for training and SHAP analysis.
 
-* Added MLP mixer. (2022/6)
+---
 
-* Changed default training settings for ViT.
+## Training
 
-* Fixed some bugs and training settings (2024/2)
+```bash
+# ViT patch=4, 200 epochs (default)
+python train_cifar10.py --nowandb
 
-* Added onnx and torchscript model exports. (2024/12)
+# CIFAR-100
+python train_cifar10.py --dataset cifar100 --nowandb
 
-* Added mobilevit. (2025/1)
+# Longer training for higher accuracy
+python train_cifar10.py --n_epochs 500 --nowandb
 
-* Add CIFAR-100 support (2025/4)
+# Smaller patch size
+python train_cifar10.py --patch 2 --nowandb
 
-* Add Dynamic Tanh ViT (2025/6)
+# Other architectures
+python train_cifar10.py --net vit_small --n_epochs 400 --nowandb
+python train_cifar10.py --net convmixer --n_epochs 400 --nowandb
+python train_cifar10.py --net mlpmixer --n_epochs 500 --lr 1e-3 --nowandb
+python train_cifar10.py --net cait --n_epochs 200 --nowandb
+python train_cifar10.py --net swin --n_epochs 400 --nowandb
+python train_cifar10.py --net res18 --nowandb
+python train_cifar10.py --net dyt --nowandb
+python train_cifar10.py --net vit_timm  # pretrained ViT-base from timm
+```
 
-# Usage example
-`pip install -r requirements.txt` # install dependencies
+Checkpoints are saved to `./checkpoint/`, logs to `./log/`.
+Use `--resume` to continue from a saved checkpoint.
 
-`python train_cifar10.py` # vit-patchsize-4
+---
 
-`python train_cifar10.py --dataset cifar100` # cifar-100
+## SHAP Patch-Importance Analysis
 
-`python train_cifar10.py  --size 48` # vit-patchsize-4-imsize-48
+For each test image, SHAP computes which 4×4 patches contributed positively (red) or negatively (blue) to the model's predicted class. The `shap_analysis.py` script uses a partition explainer with a blur masker over the ViT's natural 8×8 patch grid.
 
-`python train_cifar10.py --patch 2` # vit-patchsize-2
+```bash
+# Analyse 100 test images (10 per class), ~1 minute on M-series Mac
+python shap_analysis.py --nowandb
 
-`python train_cifar10.py --net vit_small --n_epochs 400` # vit-small
+# More images for robust per-class statistics
+python shap_analysis.py --n_images 500
 
-`python train_cifar10.py --net vit_timm` # train with pretrained vit
+# Point at a different checkpoint
+python shap_analysis.py --checkpoint ./checkpoint/vit-cifar10-4-ckpt.t7
+```
 
-`python train_cifar10.py --net dyt` # train with Layernorm-less ViT (DyT)
+### Output files (`./shap_results/`)
 
-`python train_cifar10.py --net convmixer --n_epochs 400` # train with convmixer
+| File | Description |
+|------|-------------|
+| `individual_explanations.png` | Per-image panels: original / SHAP heatmap / overlay (first 30 images) |
+| `mean_shap_per_class.png` | Average SHAP heatmap per class across correct predictions |
+| `patch_importance_summary.png` | Global mean \|SHAP\| map + top-5 most-attended patch positions |
+| `patch_shap.npy` | Raw SHAP arrays `(N, 8, 8)` for custom analysis |
+| `labels.npy` / `predicted.npy` / `images.npy` | Ground-truth labels, model predictions, and input images |
 
-`python train_cifar10.py --net mlpmixer --n_epochs 500 --lr 1e-3`
+---
 
-`python train_cifar10.py --net cait --n_epochs 200` # train with cait
+## Results
 
-`python train_cifar10.py --net swin --n_epochs 400` # train with SwinTransformers
-
-`python train_cifar10.py --net res18` # resnet18+randaug
-
-# Results..
-
-| CIFAR10 | Accuracy | Train Log |
-|:-----------:|:--------:|:--------:|
-| ViT patch=2 |    80%    | |
-| ViT patch=4 Epoch@200 |    80%   | [Log](https://wandb.ai/arutema47/cifar10-challange/reports/Untitled-Report--VmlldzoxNjU3MTU2?accessToken=3y3ib62e8b9ed2m2zb22dze8955fwuhljl5l4po1d5a3u9b7yzek1tz7a0d4i57r) |
-| ViT patch=4 Epoch@500 |    85%   | [Log](https://api.wandb.ai/links/arutema47/wrfsfmlo) |
-| ViT patch=4 Epoch@1000 |    89%   | [Log](https://api.wandb.ai/links/arutema47/sr9eph7v) |
-| ViT patch=8 |    30%   | |
-| ViT small  | 80% | |
-| DyT |    74%   | [Log](https://api.wandb.ai/links/arutema47/9lsyl4u0) |
-| MLP mixer |    88%   | |
-| CaiT  | 80% | |
-| Swin-t  | 90% | |
+| CIFAR-10 | Accuracy | Notes |
+|:---------:|:--------:|:-----:|
+| ViT patch=4 @ 200 epochs | 78–80% | Our run: **78.21%** on M3 Max |
+| ViT patch=4 @ 500 epochs | 85% | |
+| ViT patch=4 @ 1000 epochs | 89% | |
+| ViT patch=2 | 80% | |
+| ViT small | 80% | |
+| DyT | 74% | Layernorm-less ViT |
+| MLP Mixer | 88% | |
+| CaiT | 80% | |
+| Swin-t | 90% | |
 | ViT small (timm transfer) | 97.5% | |
 | ViT base (timm transfer) | 98.5% | |
-| [ConvMixerTiny(no pretrain)](https://openreview.net/forum?id=TVHS5Y4dNvM) | 96.3% |[Log](https://wandb.ai/arutema47/cifar10-challange/reports/convmixer--VmlldzoyMjEyOTk1?accessToken=2w9nox10so11ixf7t0imdhxq1rf1ftgzyax4r9h896iekm2byfifz3b7hkv3klrt)|
-|   resnet18  |  93%  | |
-|   resnet18+randaug  |  95%  | [Log](https://wandb.ai/arutema47/cifar10-challange/reports/Untitled-Report--VmlldzoxNjU3MTYz?accessToken=968duvoqt6xq7ep75ob0yppkzbxd0q03gxy2apytryv04a84xvj8ysdfvdaakij2) |
+| ConvMixer (no pretrain) | 96.3% | |
+| ResNet18 | 93% | |
+| ResNet18 + RandAug | 95% | |
 
-| CIFAR100 | Accuracy | Train Log |
-|:-----------:|:--------:|:--------:|
-| ViT patch=4 Epoch@200 |    52%   | [Log](https://api.wandb.ai/links/arutema47/f8mz3mpk) |
-| resnet18+randaug |    71%   | [Log](https://wandb.ai/arutema47/cifar-challenge/reports/Res18-CIFAR100--VmlldzoxMjUwNzU3Mg?accessToken=fw9ojmpfuqrrxjers2duixssezqifaonvbmf8x3ynieldw3auh53ax992g0z6cx3) |
+| CIFAR-100 | Accuracy |
+|:---------:|:--------:|
+| ViT patch=4 @ 200 epochs | 52% |
+| ResNet18 + RandAug | 71% |
 
+---
 
+## Model Export
 
-# Used in..
-* Vision Transformer Pruning [arxiv](https://arxiv.org/abs/2104.08500) [github](https://github.com/Cydia2018/ViT-cifar10-pruning)
-* Understanding why ViT trains badly on small datasets: an intuitive perspective [arxiv](https://arxiv.org/abs/2302.03751)
-* Training deep neural networks with adaptive momentum inspired by the quadratic optimization [arxiv](https://arxiv.org/abs/2110.09057)
-* [Moderate coreset: A universal method of data selection for real-world data-efficient deep learning ](https://openreview.net/forum?id=7D5EECbOaf9)
+Export a trained model to ONNX or TorchScript:
 
-# Model Export
-This repository supports exporting trained models to ONNX and TorchScript formats for deployment purposes. You can export your trained models using the `export_models.py` script.
-
-### Basic Usage
 ```bash
-python export_models.py --checkpoint path/to/checkpoint --model_type vit --output_dir exported_models
+python export_models.py --checkpoint ./checkpoint/vit-cifar10-4-ckpt.t7 \
+    --model_type vit --output_dir exported_models --verify
+```
+
+---
+
+## Updates
+
+* Added SHAP patch-importance analysis (`shap_analysis.py`) with MPS support (2025/4)
+* Fixed MPS (Apple Silicon) compatibility for all training and inference (2025/4)
+* Added conda environment (`environment.yml`) for reproducible setup (2025/4)
+* Added CIFAR-100 support (2025/4)
+* Added Dynamic Tanh ViT / DyT (2025/3)
+* Added MobileViT (2025/1)
+* Added ONNX and TorchScript model export (2024/12)
+* Fixed bugs and training settings (2024/2)
+* Added MLP Mixer (2022/6)
+* Added Swin Transformers, CaiT, ViT-small (2022/3)
+* Added wandb logging (2022/3)
+* Added ConvMixer (2021/10)
+
+---
+
+## Used in
+
+* Vision Transformer Pruning — [arxiv](https://arxiv.org/abs/2104.08500) / [github](https://github.com/Cydia2018/ViT-cifar10-pruning)
+* Understanding why ViT trains badly on small datasets — [arxiv](https://arxiv.org/abs/2302.03751)
+* Training deep neural networks with adaptive momentum — [arxiv](https://arxiv.org/abs/2110.09057)
+* Moderate coreset: A universal method of data selection — [openreview](https://openreview.net/forum?id=7D5EECbOaf9)
